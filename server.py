@@ -3,11 +3,10 @@ import os
 import time
 import json
 import threading
-from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import requests
-from flask import Flask, request, render_template, redirect, url_for, jsonify
+from flask import Flask, request, render_template, redirect, jsonify
 
 #
 # Simple Drive-login compatible server (show-code flow)
@@ -24,9 +23,11 @@ from flask import Flask, request, render_template, redirect, url_for, jsonify
 #  - GET /oauth2callback   -> Google redirects here with ?code=... ; server exchanges for tokens and shows form to enter Kodi code
 #  - POST /bind            -> form submits Kodi code -> server stores mapping code -> token info
 #  - GET /token?code=ABC   -> Kodi polls this endpoint; returns JSON {access_token, refresh_token, expires_in, obtained_at}
+#  - POST /register        -> Kodi sends code, server returns URL to open
+#  - GET /status/<code>    -> Kodi polls login status
+#  - GET /ping             -> health check
 #
-# Storage: in-memory dict with TTL (simple, works on free Render if instance is alive).
-#
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.getenv("SECRET_KEY", "change-me-in-production")
 
@@ -61,10 +62,12 @@ def cleanup_store():
 t = threading.Thread(target=cleanup_store, daemon=True)
 t.start()
 
+# --- MAIN PAGES ---
+
 @app.route("/")
 def index():
-    # simple page with sign-in and field to paste Kodi code
-    return render_template("index.html", base_url=BASE_URL)
+    kodi_code = request.args.get("kodi_code", "").strip().upper()
+    return render_template("index.html", base_url=BASE_URL, kodi_code=kodi_code)
 
 @app.route("/login")
 def login():
@@ -73,20 +76,18 @@ def login():
         "response_type": "code",
         "scope": SCOPE,
         "redirect_uri": BASE_URL.rstrip("/") + "/oauth2callback",
-        "access_type": "offline",   # to get refresh_token
-        "prompt": "consent",       # force refresh_token on every consent (first time only)
+        "access_type": "offline",
+        "prompt": "consent",
     }
     url = GOOGLE_OAUTH_URL + "?" + urlencode(params)
     return redirect(url)
 
 @app.route("/oauth2callback")
 def oauth2callback():
-    # Google returns ?code=...
     code = request.args.get("code")
     if not code:
         return "Missing code from Google", 400
 
-    # exchange code for tokens
     data = {
         "code": code,
         "client_id": CLIENT_ID,
@@ -98,17 +99,10 @@ def oauth2callback():
     if r.status_code != 200:
         return f"Token exchange failed: {r.status_code} {r.text}", 500
     token_info = r.json()
-    # token_info contains: access_token, expires_in, refresh_token (if granted), scope, token_type, id_token
-
-    # Show a page where the user pastes the Kodi code so server can bind it
     return render_template("done.html", token_info=json.dumps(token_info), token_json=json.dumps(token_info))
 
 @app.route("/bind", methods=["POST"])
 def bind():
-    """
-    Accept form submission from done.html where the user provides the Kodi code to bind.
-    Expects form fields: kodi_code and token_info (JSON).
-    """
     kodi_code = request.form.get("kodi_code", "").strip().upper()
     token_info = request.form.get("token_info", "")
     if not kodi_code or not token_info:
@@ -116,7 +110,7 @@ def bind():
 
     try:
         token_info = json.loads(token_info)
-    except Exception as e:
+    except Exception:
         return "Invalid token JSON", 400
 
     now = time.time()
@@ -132,18 +126,6 @@ def bind():
 
 @app.route("/token")
 def token():
-    """
-    Called by Kodi addon:
-    GET /token?code=ABC123
-
-    Returns JSON:
-    {
-      "access_token": "...",
-      "refresh_token": "...",  # optional (present if granted)
-      "expires_in": 3599,
-      "obtained_at": 1590000000
-    }
-    """
     code = request.args.get("code", "").strip().upper()
     if not code:
         return jsonify({"error":"missing_code"}), 400
@@ -153,10 +135,8 @@ def token():
     if not rec:
         return jsonify({"available": False}), 404
 
-    # If access token expired (or near expiry) and we have a refresh_token, refresh it
     now = time.time()
     if rec.get("expires_at", 0) <= now + 30 and rec.get("refresh_token"):
-        # refresh
         refresh_payload = {
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
@@ -166,21 +146,15 @@ def token():
         rr = requests.post(GOOGLE_TOKEN_URL, data=refresh_payload)
         if rr.status_code == 200:
             newtokens = rr.json()
-            # update record
             rec["access_token"] = newtokens.get("access_token")
             rec["expires_at"] = now + int(newtokens.get("expires_in", 3600))
             rec["obtained_at"] = now
-            # keep refresh_token if not provided in response
             if newtokens.get("refresh_token"):
                 rec["refresh_token"] = newtokens.get("refresh_token")
             rec["raw"].update(newtokens)
             with STORE_LOCK:
                 STORE[code] = rec
-        else:
-            # failed to refresh - continue but return what we have (may be expired)
-            pass
 
-    # Return token info
     out = {
         "access_token": rec.get("access_token"),
         "refresh_token": rec.get("refresh_token"),
@@ -189,34 +163,19 @@ def token():
     }
     return jsonify(out)
 
-# small success page after binding
-@app.route("/ok")
-def ok():
-    return "OK"
-# --- Kodi compatibility endpoints ---
-
-
-
-# simple ping route for health checks
+# --- HEALTH CHECK ---
 @app.route("/ping")
 def ping():
     return "pong", 200
-    
-    # --- Kodi compatibility endpoints ---
 
+# --- KODI LOGIN COMPATIBILITY ---
 @app.route("/register", methods=["POST"])
-def register():
-    """
-    Kodi sends {"code":"XXXX"} here when starting login.
-    Server should tell Kodi the URL user should open in a browser.
-    """
+def kodi_register():
     data = request.get_json(force=True)
     kodi_code = data.get("code", "").strip().upper()
     if not kodi_code:
         return jsonify({"error": "missing_code"}), 400
 
-    # Store an empty entry so /status knows it exists
-    now = time.time()
     with STORE_LOCK:
         if kodi_code not in STORE:
             STORE[kodi_code] = {
@@ -227,7 +186,6 @@ def register():
                 "raw": None
             }
 
-    # Return exactly what Kodi expects
     return jsonify({
         "status": "pending",
         "url": f"{BASE_URL}/?kodi_code={kodi_code}"
@@ -235,9 +193,6 @@ def register():
 
 @app.route("/status/<code>")
 def status(code):
-    """
-    Kodi polls this to see if login is complete.
-    """
     code = code.strip().upper()
     with STORE_LOCK:
         rec = STORE.get(code)
@@ -255,6 +210,10 @@ def status(code):
     else:
         return jsonify({"status": "pending"}), 200
 
+# --- ENDPOINT OK ---
+@app.route("/ok")
+def ok():
+    return "OK"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
