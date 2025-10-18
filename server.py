@@ -234,6 +234,60 @@ def status(code):
 @app.route("/ping")
 def ping():
     return "pong", 200
+    
+    # --- Kodi compatibility endpoints ---
+
+@app.route("/register", methods=["POST"])
+def register():
+    """
+    Kodi sends {"code":"XXXX"} here when starting login.
+    Server should tell Kodi the URL user should open in a browser.
+    """
+    data = request.get_json(force=True)
+    kodi_code = data.get("code", "").strip().upper()
+    if not kodi_code:
+        return jsonify({"error": "missing_code"}), 400
+
+    # Store an empty entry so /status knows it exists
+    now = time.time()
+    with STORE_LOCK:
+        if kodi_code not in STORE:
+            STORE[kodi_code] = {
+                "access_token": None,
+                "refresh_token": None,
+                "expires_at": 0,
+                "obtained_at": 0,
+                "raw": None
+            }
+
+    # Return exactly what Kodi expects
+    return jsonify({
+        "status": "pending",
+        "url": f"{BASE_URL}/?kodi_code={kodi_code}"
+    })
+
+@app.route("/status/<code>")
+def status(code):
+    """
+    Kodi polls this to see if login is complete.
+    """
+    code = code.strip().upper()
+    with STORE_LOCK:
+        rec = STORE.get(code)
+    if not rec:
+        return jsonify({"status": "pending"}), 200
+
+    if rec.get("access_token"):
+        return jsonify({
+            "status": "success",
+            "access_token": rec.get("access_token"),
+            "refresh_token": rec.get("refresh_token"),
+            "expires_in": int(rec.get("expires_at", time.time()) - time.time()),
+            "obtained_at": rec.get("obtained_at")
+        }), 200
+    else:
+        return jsonify({"status": "pending"}), 200
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
