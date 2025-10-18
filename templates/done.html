@@ -1,0 +1,32 @@
+<!-- templates/done.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Sign in complete</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width:720px; margin:40px auto; }
+    .card { border:1px solid #ddd; padding:20px; border-radius:8px; }
+    textarea { width:100%; height:160px; }
+    input, button { font-size:16px; padding:8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Google sign-in completed</h2>
+    <p>Now copy the <strong>Kodi code</strong> you see in your Kodi addon and paste it below to bind the tokens to your Kodi device.</p>
+
+    <form method="POST" action="/bind">
+      <label>Kodi code (shown in Kodi):</label><br>
+      <input name="kodi_code" placeholder="Enter code from Kodi (e.g. ABC123)" style="width:60%" required /><br><br>
+
+      <label>Token JSON (do not edit):</label><br>
+      <textarea name="token_info" readonly>{{ token_json }}</textarea><br><br>
+
+      <button type="submit">Bind code to this account</button>
+    </form>
+
+    <p style="margin-top:10px; font-size:13px; color:#666;">Tip: Open Kodi on the device where you want Drive, click "Sign in", copy the code, then paste it here.</p>
+  </div>
+</body>
+</html>

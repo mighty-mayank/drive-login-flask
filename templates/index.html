@@ -1,0 +1,31 @@
+<!-- templates/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Sign in to Google Drive</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width:720px; margin:40px auto; }
+    .card { border:1px solid #ddd; padding:20px; border-radius:8px; }
+    input, button { font-size:16px; padding:8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Sign in with Google Drive</h2>
+    <p>Click below to sign in with your Google account and then paste the <strong>code shown in Kodi</strong> into the final form.</p>
+    <p><a href="/login"><button>Sign in with Google</button></a></p>
+
+    <hr>
+
+    <h3>Already signed in?</h3>
+    <p>If you already completed sign-in and have a code from Kodi, paste it here:</p>
+    <form method="GET" action="/token">
+      <input name="code" placeholder="Enter Kodi code (e.g. ABC123)" style="width:60%" />
+      <button type="submit">Check token (for debug)</button>
+    </form>
+
+    <p style="margin-top:20px; font-size:12px; color:#666;">Note: After signing in you will need to paste the Kodi code so the server can bind the tokens to the code.</p>
+  </div>
+</body>
+</html>
