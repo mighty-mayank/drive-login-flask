@@ -193,6 +193,47 @@ def token():
 @app.route("/ok")
 def ok():
     return "OK"
+# --- Kodi compatibility endpoints ---
+
+@app.route("/register", methods=["POST"])
+def register():
+    """
+    Kodi sends {"code": "XXXX"} here when starting login.
+    Server should tell user where to visit for auth.
+    """
+    data = request.get_json(force=True)
+    kodi_code = data.get("code", "").strip().upper()
+    if not kodi_code:
+        return jsonify({"error": "missing_code"}), 400
+
+    # Just return the URL that user should open in a browser
+    return jsonify({
+        "url": f"{BASE_URL}/?code={kodi_code}"
+    })
+
+@app.route("/status/<code>")
+def status(code):
+    """
+    Kodi polls this to see if login is complete.
+    """
+    code = code.strip().upper()
+    with STORE_LOCK:
+        rec = STORE.get(code)
+    if not rec:
+        return jsonify({"status": "pending"}), 200
+    else:
+        return jsonify({
+            "status": "success",
+            "access_token": rec.get("access_token"),
+            "refresh_token": rec.get("refresh_token"),
+            "expires_in": int(rec.get("expires_at", 0) - time.time()),
+            "obtained_at": rec.get("obtained_at")
+        }), 200
+
+# simple ping route for health checks
+@app.route("/ping")
+def ping():
+    return "pong", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
